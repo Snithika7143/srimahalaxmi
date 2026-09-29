@@ -111,6 +111,18 @@ input[type=checkbox]{accent-color:var(--rani)}
 .viewer .vcap{color:#FFF3E4;text-align:center;display:grid;gap:4px}
 .viewer .row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
 .viewer .btn.ghost{background:transparent;color:#FFF3E4;border-color:rgba(255,243,228,.4)}
+
+.dots{display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:4px 0 2px;background:none;border:0;cursor:pointer}
+.dot{width:14px;height:14px;border-radius:50%;box-shadow:inset 0 0 0 1px rgba(0,0,0,.18);display:inline-block;position:relative;flex:none}
+.dot.big{width:18px;height:18px}
+.dot.out{opacity:.35}
+.dot.out::after{content:"";position:absolute;left:-2px;right:-2px;top:50%;height:1.5px;background:#3D0F1F;transform:rotate(-45deg)}
+.more{font-size:11px;color:var(--ink-3);font-weight:600}
+.swatches{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:560px}
+.sw{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.1);border:1px solid rgba(255,243,228,.3);color:#FFF3E4;border-radius:999px;padding:4px 10px 4px 5px;font-size:13px}
+.sw.on{background:#FFF3E4;color:var(--ink);border-color:#FFF3E4}
+.sw.out span{text-decoration:line-through;opacity:.75}
+.viewer img{max-height:60vh}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--ink);color:#FFF3E4;padding:10px 18px;border-radius:999px;z-index:60;font-weight:500;max-width:calc(100% - 32px);text-align:center}
 </style>
 </head>
@@ -121,7 +133,7 @@ input[type=checkbox]{accent-color:var(--rani)}
 "use strict";
 var C=window.SHOP, app=document.getElementById("app");
 var items=null, loadError=false;
-var ui={fabric:"All",q:"",sort:"new",hideSold:false,view:null,msg:""};
+var ui={fabric:"All",q:"",sort:"new",hideSold:false,view:null,pick:0,msg:""};
 
 /* ---------- helpers ---------- */
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
@@ -183,87 +195,134 @@ function toItems(rows){
   }).filter(function(it){return it.name&&it.show;});
 }
 
-function status(it){
-  if(it.qty<=0) return {k:"bad",t:"Sold out"};
-  if(it.qty<=it.low) return {k:"warn",t:"Only "+it.qty+" left"};
+/* Rows with the same Code (or Name) are one saree model in several colours */
+function toModels(rows){
+  var map={},order=[];
+  rows.forEach(function(r){
+    var key=(r.code||r.name).toLowerCase();
+    var m=map[key];
+    if(!m){m=map[key]={key:key,n:order.length,code:r.code,name:r.name,fabric:r.fabric,price:r.price,desc:r.desc,colours:[]};order.push(m);}
+    if(!m.price&&r.price)m.price=r.price;
+    if(!m.desc&&r.desc)m.desc=r.desc;
+    m.colours.push({color:r.color||"",qty:r.qty,photo:r.photo});
+  });
+  order.forEach(function(m){
+    m.qty=m.colours.reduce(function(s,c){return s+Math.max(0,c.qty);},0);
+    m.avail=m.colours.filter(function(c){return c.qty>0;});
+    var withPhoto=m.avail.filter(function(c){return c.photo;})[0]||m.colours.filter(function(c){return c.photo;})[0];
+    m.cover=withPhoto||m.avail[0]||m.colours[0];
+  });
+  return order;
+}
+function status(m){
+  if(m.qty<=0) return {k:"bad",t:"Sold out"};
+  if(m.qty<=2) return {k:"warn",t:"Only "+m.qty+" left"};
   return {k:"ok",t:"In stock"};
 }
 
-/* A woven saree swatch, shown until a real photo is added */
-var PALETTE=[["#7A1328","#C9962B"],["#0F5A43","#D4A73A"],["#0C5E7A","#B0265E"],["#23305E","#B3261E"],["#C9901D","#5B2A12"],["#5A1E6E","#E6A11E"],["#9C3B63","#F2C6D3"],["#1C1A1F","#B8862B"]];
+/* Colour names -> swatch colours */
+var HUES={"red":"#B3261E","maroon":"#6B1024","green":"#2E7D32","dark green":"#1B4D2A","light green":"#8BC48A","mehandi green":"#6B7A2A","mehendi green":"#6B7A2A","pista green":"#A8C686","blue":"#1F4E9A","light blue":"#8DB6E0","sky blue":"#6EB5E6","cloud blue":"#A9C4DE","yellow":"#E3B81C","orange":"#E0701A","light orange":"#F4A96A","pink":"#E0569A","light pink":"#F4B6CC","magenta pink":"#C2185B","magentha pink":"#C2185B","peach":"#F4B69A","light peach":"#F8CDB5","coffee":"#6F4E37","brown":"#7B4A2A","mauve":"#B07A9E","lavender":"#B9A3D6","violet":"#6A3FA0","light purple":"#B79AD6","purple":"#5A1E6E","ash":"#9E9E9E","grey":"#8A8A8A","black":"#1C1A1F","white":"#F7F5F0","off white":"#EFE8D8","cream":"#EFE0BE","gold":"#C9962B"};
+function hue(name){
+  var s=String(name||"").toLowerCase().replace(/[^a-z ]/g," ").replace(/\s+/g," ").trim();
+  if(HUES[s])return HUES[s];
+  var keys=Object.keys(HUES).sort(function(a,b){return b.length-a.length;});
+  for(var i=0;i<keys.length;i++){if((" "+s+" ").indexOf(" "+keys[i]+" ")>=0)return HUES[keys[i]];}
+  return "";
+}
+var FALLBACK=["#7A1328","#0F5A43","#0C5E7A","#23305E","#C9901D","#5A1E6E","#9C3B63","#1C1A1F"];
+function light(hex){var n=parseInt(hex.slice(1),16);return ((n>>16)*299+((n>>8)&255)*587+(n&255)*114)/1000>170;}
+
+/* A woven saree swatch in the colour's own shade, shown until a real photo is added */
 var swCache={};
-function swatch(it){
-  var key=it.code+it.name; if(swCache[key]) return swCache[key];
+function swatch(m,c){
+  var key=m.key+"|"+(c&&c.color); if(swCache[key]) return swCache[key];
   var h=0,i;for(i=0;i<key.length;i++)h=(h*31+key.charCodeAt(i))>>>0;
-  var p=PALETTE[h%PALETTE.length],c=document.createElement("canvas");c.width=300;c.height=400;var g=c.getContext("2d");
-  g.fillStyle=p[0];g.fillRect(0,0,300,400);
-  g.globalAlpha=.07;g.fillStyle="#000";for(i=0;i<300;i+=3)g.fillRect(i,0,1,400);g.globalAlpha=1;
-  g.fillStyle="#D8B25A";g.globalAlpha=.7;
-  for(var r=0;r<7;r++)for(var col=0;col<4;col++){var cx=34+col*60+(r%2?30:0),cy=34+r*48;if(cx>240)continue;g.beginPath();g.moveTo(cx,cy-6);g.lineTo(cx+4,cy);g.lineTo(cx,cy+6);g.lineTo(cx-4,cy);g.fill();}
-  g.globalAlpha=1;g.fillStyle=p[1];g.fillRect(250,0,50,400);g.fillRect(0,350,250,50);
-  g.fillStyle="#D8B25A";g.fillRect(245,0,3,400);g.fillRect(0,346,250,3);g.fillRect(0,372,250,3);
-  try{swCache[key]=c.toDataURL("image/jpeg",.8);}catch(e){swCache[key]="";}
+  var body=hue(c&&c.color)||FALLBACK[h%FALLBACK.length];
+  var gold=light(body)?"#9A6B1E":"#D8B25A";
+  var cv=document.createElement("canvas");cv.width=300;cv.height=400;var g=cv.getContext("2d");
+  g.fillStyle=body;g.fillRect(0,0,300,400);
+  g.globalAlpha=.08;g.fillStyle="#000";for(i=0;i<300;i+=3)g.fillRect(i,0,1,400);g.globalAlpha=1;
+  g.fillStyle=gold;g.globalAlpha=.75;
+  var motif=h%3;
+  for(var r=0;r<7;r++)for(var col=0;col<4;col++){var cx=34+col*60+(r%2?30:0),cy=34+r*48;if(cx>240)continue;g.beginPath();
+    if(motif===0){g.arc(cx,cy,3.5,0,7);}else{g.moveTo(cx,cy-6);g.lineTo(cx+4,cy);g.lineTo(cx,cy+6);g.lineTo(cx-4,cy);}g.fill();}
+  g.globalAlpha=1;g.fillStyle=gold;g.globalAlpha=.9;g.fillRect(250,0,50,400);g.fillRect(0,350,250,50);g.globalAlpha=1;
+  g.fillStyle=body;for(var ty=0;ty<400;ty+=16){g.beginPath();g.moveTo(250,ty);g.lineTo(262,ty+8);g.lineTo(250,ty+16);g.fill();}
+  g.fillStyle=light(body)?"rgba(0,0,0,.25)":"rgba(255,255,255,.35)";g.fillRect(270,0,2,400);g.fillRect(0,372,250,2);
+  try{swCache[key]=cv.toDataURL("image/jpeg",.8);}catch(e){swCache[key]="";}
   return swCache[key];
 }
-function img(it){return it.photo||swatch(it);}
-function imgTag(it,cls){return '<img src="'+esc(img(it))+'" alt="'+esc(it.name+(it.color?", "+it.color:""))+'" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src=\''+swatch(it)+'\'">';}
+function imgTag(m,c){c=c||m.cover;var src=(c&&c.photo)||swatch(m,c);
+  return '<img src="'+esc(src)+'" alt="'+esc(m.name+(c&&c.color?", "+c.color:""))+'" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src=\''+swatch(m,c)+'\'">';}
+function dot(c,big){var hx=hue(c.color)||"#C8B8A6";return '<span class="dot'+(c.qty<=0?" out":"")+(big?" big":"")+'" style="background:'+hx+'" title="'+esc(c.color+(c.qty<=0?" (sold out)":""))+'"></span>';}
+function waFor(m,c){
+  var t="Hello "+C.name+"! I'm interested in the saree “"+m.name+"”"+(c&&c.color?" in "+c.color:"")+" (code "+m.code+(m.price?", "+rs(m.price):"")+"). Is it available?";
+  return "https://wa.me/"+waDigits()+"?text="+encodeURIComponent(t);
+}
 
 /* ---------- render ---------- */
 function render(){
   var fx=document.activeElement&&document.activeElement.id?{id:document.activeElement.id,s:document.activeElement.selectionStart}:null;
   var hasWa=waDigits().length>=8;
   var h='<header class="bar"><div class="wrap"><span class="brand">'+esc(C.name)+'</span>'+(hasWa?'<a class="btn wa" style="flex:none" href="'+esc(waLink())+'" target="_blank" rel="noopener">WhatsApp us</a>':'')+'</div></header>';
-  var visible=items||[], inStock=visible.filter(function(i){return i.qty>0;}).length;
+  var inStock=(items||[]).filter(function(m){return m.qty>0;}).length;
   h+='<main><section class="hero"><div class="wrap in"><h1>'+esc(C.name)+'</h1><p>'+esc(C.tagline)+'</p><div class="meta">'+
     (items&&items.length?'<span class="num">'+inStock+' design'+(inStock===1?'':'s')+' available now</span>':'')+
     (C.city?'<span>'+esc(C.city)+'</span>':'')+'<span>Enquire on WhatsApp for more photos, blouse details and delivery</span></div></div></section><div class="wrap">';
 
   if(items===null && !loadError){
-    h+='<div class="frames" aria-label="Loading">'+Array(6).join('<div class="skel"></div>')+'</div>';
+    h+='<div class="frames" aria-label="Loading">'+Array(7).join('<div class="skel"></div>')+'</div>';
   } else if(loadError){
     h+='<div class="state"><h2>The collection didn’t load</h2><p>Check your connection and refresh the page, or message us to see what’s available.</p>'+(hasWa?'<a class="btn wa" style="flex:none" href="'+esc(waLink())+'" target="_blank" rel="noopener">Ask on WhatsApp</a>':'')+'</div>';
   } else if(!items.length){
     h+='<div class="state"><h2>New collection coming soon</h2><p>We’re adding photos of our sarees. Message us to see what’s in the shop today.</p>'+(hasWa?'<a class="btn wa" style="flex:none" href="'+esc(waLink())+'" target="_blank" rel="noopener">Ask on WhatsApp</a>':'')+'</div>';
   } else {
-    var fabs={};items.forEach(function(i){if(i.fabric)fabs[i.fabric]=1;});
+    var fabs={};items.forEach(function(m){if(m.fabric)fabs[m.fabric]=1;});
     h+='<div class="filters" role="group" aria-label="Filter by fabric">';
     ["All"].concat(Object.keys(fabs).sort()).forEach(function(f){h+='<button class="chip" data-act="fabric" data-v="'+esc(f)+'" aria-pressed="'+(ui.fabric===f)+'">'+esc(f)+'</button>';});
     h+='</div><div class="filters"><input id="q" class="field" type="search" placeholder="Search colour, fabric or code" value="'+esc(ui.q)+'" data-in="q" style="flex:1 1 220px" aria-label="Search">'+
-      '<select id="sort" class="field" data-in="sort" aria-label="Sort"><option value="new"'+(ui.sort==="new"?" selected":"")+'>Newest first</option><option value="low"'+(ui.sort==="low"?" selected":"")+'>Price: low to high</option><option value="high"'+(ui.sort==="high"?" selected":"")+'>Price: high to low</option></select>'+
+      '<select id="sort" class="field" data-in="sort" aria-label="Sort"><option value="new"'+(ui.sort==="new"?" selected":"")+'>Featured</option><option value="low"'+(ui.sort==="low"?" selected":"")+'>Price: low to high</option><option value="high"'+(ui.sort==="high"?" selected":"")+'>Price: high to low</option></select>'+
       '<label class="check"><input id="hidesold" type="checkbox" data-in="hideSold"'+(ui.hideSold?" checked":"")+'> Hide sold out</label></div>';
-    var list=items.filter(function(i){
-      if(ui.fabric!=="All"&&i.fabric!==ui.fabric)return false;
-      if(ui.hideSold&&i.qty<=0)return false;
-      if(ui.q){var q=ui.q.toLowerCase();if((i.name+" "+i.fabric+" "+i.color+" "+i.code+" "+i.desc).toLowerCase().indexOf(q)<0)return false;}
+    var list=items.filter(function(m){
+      if(ui.fabric!=="All"&&m.fabric!==ui.fabric)return false;
+      if(ui.hideSold&&m.qty<=0)return false;
+      if(ui.q){var q=ui.q.toLowerCase(),hay=(m.name+" "+m.fabric+" "+m.code+" "+m.desc+" "+m.colours.map(function(c){return c.color;}).join(" ")).toLowerCase();if(hay.indexOf(q)<0)return false;}
       return true;
     });
     list.sort(function(a,b){
+      var sa=a.qty>0?0:1,sb=b.qty>0?0:1;
       if(ui.sort==="low")return a.price-b.price;
       if(ui.sort==="high")return b.price-a.price;
-      var sa=a.qty>0?0:1,sb=b.qty>0?0:1;if(sa!==sb)return sa-sb;
-      return b.n-a.n;
+      if(sa!==sb)return sa-sb;
+      return a.n-b.n;
     });
     if(!list.length) h+='<p class="state">No sarees match that search.</p>';
     h+='<div class="frames">';
-    list.forEach(function(it){
-      var st=status(it);
-      h+='<article class="frame'+(it.qty<=0?" sold":"")+'"><button class="ph" data-act="view" data-v="'+it.n+'" aria-label="Enlarge photo of '+esc(it.name)+'">'+imgTag(it)+'<span class="pill '+st.k+'">'+esc(st.t)+'</span></button>'+
-        '<div class="cap"><h3>'+esc(it.name)+'</h3><span class="sub">'+esc([it.fabric,it.color].filter(Boolean).join(" · "))+'</span>'+
-        '<span class="price num">'+(it.price?rs(it.price):'Ask for price')+(it.code?' <span class="code">'+esc(it.code)+'</span>':'')+'</span>'+
-        '<div class="actions">'+(hasWa?'<a class="btn wa" href="'+esc(waLink(it))+'" target="_blank" rel="noopener">'+(it.qty>0?"WhatsApp":"Ask for restock")+'</a>':'')+'</div></div></article>';
+    list.forEach(function(m){
+      var st=status(m),na=m.avail.length;
+      h+='<article class="frame'+(m.qty<=0?" sold":"")+'"><button class="ph" data-act="view" data-v="'+m.n+'" aria-label="See colours of '+esc(m.name)+'">'+imgTag(m)+'<span class="pill '+st.k+'">'+esc(st.t)+'</span></button>'+
+        '<div class="cap"><h3>'+esc(m.name)+'</h3><span class="sub">'+esc(m.fabric)+(m.colours.length>1||m.colours[0].color?' · '+(na||m.colours.length)+' colour'+((na||m.colours.length)===1?'':'s'):'')+'</span>'+
+        '<button class="dots" data-act="view" data-v="'+m.n+'" aria-label="Colours available">'+m.colours.slice(0,9).map(function(c){return dot(c);}).join("")+(m.colours.length>9?'<span class="more">+'+(m.colours.length-9)+'</span>':'')+'</button>'+
+        '<span class="price num">'+(m.price?rs(m.price):'Ask for price')+(m.code?' <span class="code">'+esc(m.code)+'</span>':'')+'</span>'+
+        '<div class="actions">'+(hasWa?(m.qty>0&&m.colours.length>1?'<button class="btn wa" data-act="view" data-v="'+m.n+'">Choose colour</button>':'<a class="btn wa" href="'+esc(waFor(m,m.qty>0?m.avail[0]:null))+'" target="_blank" rel="noopener">'+(m.qty>0?"WhatsApp":"Ask for restock")+'</a>'):'')+'</div></div></article>';
     });
     h+='</div>';
   }
   h+='</div>';
   h+='<section class="wrap contact"><h2>Message us</h2>'+
-    (hasWa?'<div class="copyline"><span>WhatsApp</span><output>+'+esc(waDigits())+'</output><button class="btn ghost" data-act="copy">Copy number</button></div><span class="small">Mention the saree code so we can find it quickly.</span>':'')+
+    (hasWa?'<div class="copyline"><span>WhatsApp</span><output>+'+esc(waDigits())+'</output><button class="btn ghost" data-act="copy">Copy number</button></div><span class="small">Mention the saree code and colour so we can find it quickly.</span>':'')+
     (C.city?'<span class="small">'+esc(C.name)+' · '+esc(C.city)+'</span>':'')+'</section></main>';
 
   if(ui.view!==null&&items){
-    var it=items.filter(function(x){return x.n===ui.view;})[0];
-    if(it) h+='<div class="viewer" data-act="close" role="dialog" aria-modal="true" aria-label="'+esc(it.name)+'">'+imgTag(it)+
-      '<div class="vcap"><b>'+esc(it.name)+'</b><span>'+esc([it.fabric,it.color,it.price?rs(it.price):""].filter(Boolean).join(" · "))+'</span>'+(it.desc?'<span class="small" style="color:#E8D5C8">'+esc(it.desc)+'</span>':'')+'</div>'+
-      '<div class="row">'+(hasWa?'<a class="btn wa" style="flex:none" href="'+esc(waLink(it))+'" target="_blank" rel="noopener">Ask on WhatsApp</a>':'')+'<button class="btn ghost" data-act="close">Close</button></div></div>';
+    var m=items.filter(function(x){return x.n===ui.view;})[0];
+    if(m){
+      var cur=m.colours[ui.pick]||m.cover;
+      h+='<div class="viewer" data-act="close" role="dialog" aria-modal="true" aria-label="'+esc(m.name)+'">'+imgTag(m,cur)+
+        '<div class="vcap"><b>'+esc(m.name)+'</b><span>'+esc([m.fabric,m.price?rs(m.price):"",m.code].filter(Boolean).join(" · "))+'</span>'+(m.desc?'<span class="small" style="color:#E8D5C8">'+esc(m.desc)+'</span>':'')+'</div>'+
+        (m.colours.length>1||m.colours[0].color?'<div class="swatches" role="group" aria-label="Colours">'+m.colours.map(function(c,i){
+          return '<button class="sw'+(c===cur?" on":"")+(c.qty<=0?" out":"")+'" data-act="pick" data-v="'+i+'">'+dot(c,true)+'<span>'+esc(c.color||"This design")+(c.qty<=0?' · sold out':'')+'</span></button>';}).join("")+'</div>':'')+
+        '<div class="row">'+(hasWa?'<a class="btn wa" style="flex:none" href="'+esc(waFor(m,cur))+'" target="_blank" rel="noopener">'+(cur&&cur.qty>0?'Ask about '+esc(cur.color||'this saree'):'Ask for restock')+'</a>':'')+'<button class="btn ghost" data-act="close">Close</button></div></div>';
+    }
   }
   if(ui.msg) h+='<div class="toast" role="status">'+esc(ui.msg)+'</div>';
   app.innerHTML=h;
@@ -276,7 +335,8 @@ app.addEventListener("click",function(ev){
   var a=t.getAttribute("data-act"),v=t.getAttribute("data-v");
   if(a==="close"&&t.classList.contains("viewer")&&ev.target!==t)return;
   if(a==="fabric")ui.fabric=v;
-  else if(a==="view")ui.view=+v;
+  else if(a==="view"){ui.view=+v;var mm=items.filter(function(x){return x.n===ui.view;})[0];ui.pick=mm?mm.colours.indexOf(mm.cover):0;}
+  else if(a==="pick")ui.pick=+v;
   else if(a==="close")ui.view=null;
   else if(a==="copy"){var n="+"+waDigits();try{navigator.clipboard.writeText(n).then(function(){toast("Number copied");},function(){toast(n);});}catch(e){toast(n);}return;}
   render();
@@ -288,7 +348,7 @@ document.addEventListener("keydown",function(e){if(e.key==="Escape"&&ui.view!==n
 render();
 var src=C.sheetCsvUrl?C.sheetCsvUrl:"stock.csv?v="+Date.now();
 fetch(src,{cache:"no-store"}).then(function(r){if(!r.ok)throw new Error(r.status);return r.text();})
-  .then(function(t){items=toItems(parseCSV(t));render();})
+  .then(function(t){items=toModels(toItems(parseCSV(t)));render();})
   .catch(function(){loadError=true;render();});
 })();
 </script>
